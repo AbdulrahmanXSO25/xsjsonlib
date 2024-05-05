@@ -3,8 +3,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#define _POSIX_C_SOURCE 200809L
-
 typedef enum {
     JSON_NULL,
     JSON_INT,
@@ -125,88 +123,6 @@ void json_free(JsonValue *value) {
     free(value);
 }
 
-typedef enum {
-    TOKEN_NUMBER,
-    TOKEN_STRING,
-    TOKEN_LBRACE,  // {
-    TOKEN_RBRACE,  // }
-    TOKEN_LBRACKET,// [
-    TOKEN_RBRACKET,// ]
-    TOKEN_COLON,   // :
-    TOKEN_COMMA,   // ,
-    TOKEN_TRUE,
-    TOKEN_FALSE,
-    TOKEN_NULL,
-    TOKEN_EOF
-} TokenType;
-
-typedef struct {
-    TokenType type;
-    char *value;
-} Token;
-
-Token getNextToken(const char **json) {
-    while (isspace(**json)) (*json)++;
-
-    Token token;
-    token.value = NULL;
-
-    switch (**json) {
-        case '\0': token.type = TOKEN_EOF; break;
-        case '{': token.type = TOKEN_LBRACE; (*json)++; break;
-        case '}': token.type = TOKEN_RBRACE; (*json)++; break;
-        case '[': token.type = TOKEN_LBRACKET; (*json)++; break;
-        case ']': token.type = TOKEN_RBRACKET; (*json)++; break;
-        case ',': token.type = TOKEN_COMMA; (*json)++; break;
-        case ':': token.type = TOKEN_COLON; (*json)++; break;
-        case '"':
-            (*json)++;
-            const char *start = *json;
-            while (**json && **json != '"') {
-                if (**json == '\\') (*json)++;
-                (*json)++;
-            }
-            token.type = TOKEN_STRING;
-            token.value = _strndup(start, *json - start);
-            (*json)++;
-            break;
-        default:
-            start = *json;
-            while (**json && !isspace(**json) && strchr(",}]", **json) == NULL) (*json)++;
-            token.value = _strndup(start, *json - start);
-            if (strcmp(token.value, "true") == 0) token.type = TOKEN_TRUE;
-            else if (strcmp(token.value, "false") == 0) token.type = TOKEN_FALSE;
-            else if (strcmp(token.value, "null") == 0) token.type = TOKEN_NULL;
-            else token.type = TOKEN_NUMBER;
-            break;
-    }
-
-    return token;
-}
-
-JsonValue *parseJson(const char **json) {
-    Token token = getNextToken(json);
-    JsonValue *value = malloc(sizeof(JsonValue));
-
-    if (!value) return NULL;
-
-    switch (token.type) {
-        case TOKEN_NUMBER:
-            value->type = JSON_INT;
-            value->data.intValue = atoi(token.value);
-            break;
-        case TOKEN_STRING:
-            value->type = JSON_STRING;
-            value->data.stringValue = token.value;
-            break;
-        default:
-            free(value);
-            return NULL;
-    }
-
-    return value;
-}
-
 void printJsonToFile(FILE *file, JsonValue *value);
 
 void printJsonObjectToFile(FILE *file, JsonValue *value) {
@@ -260,24 +176,215 @@ void printJsonToFile(FILE *file, JsonValue *value) {
     }
 }
 
+typedef enum {
+    TOKEN_NUMBER,
+    TOKEN_STRING,
+    TOKEN_LBRACE,  // {
+    TOKEN_RBRACE,  // }
+    TOKEN_LBRACKET,// [
+    TOKEN_RBRACKET,// ]
+    TOKEN_COLON,   // :
+    TOKEN_COMMA,   // ,
+    TOKEN_TRUE,
+    TOKEN_FALSE,
+    TOKEN_NULL,
+    TOKEN_EOF
+} TokenType;
+
+typedef struct {
+    TokenType type;
+    char *value;
+    int line;
+    int column;
+} Token;
+
+void updatePosition(const char **json, Token *token) {
+    token->line = 1;
+    token->column = 1;
+    const char *p = *json;
+    while (*p) {
+        if (*p == '\n') {
+            token->line++;
+            token->column = 1;
+        } else {
+            token->column++;
+        }
+        if (p == *json) {
+            break;
+        }
+        p++;
+    }
+}
+
+Token getNextToken(const char **json) {
+    Token token;
+
+    memset(&token, 0, sizeof(Token));
+
+    while(isspace(**json)) {
+        if (**json == '\n') {
+            token.line++;
+            token.column = 0;
+        }
+        (*json)++;
+        token.column++;
+    }
+
+    updatePosition(json, &token);
+
+    switch (**json) {
+        case '\0': token.type = TOKEN_EOF; break;
+        case '{': token.type = TOKEN_LBRACE; (*json)++; break;
+        case '}': token.type = TOKEN_RBRACE; (*json)++; break;
+        case '[': token.type = TOKEN_LBRACKET; (*json)++; break;
+        case ']': token.type = TOKEN_RBRACKET; (*json)++; break;
+        case ',': token.type = TOKEN_COMMA; (*json)++; break;
+        case ':': token.type = TOKEN_COLON; (*json)++; break;
+        case '"':
+            (*json)++;
+            const char *start = *json;
+            while (**json && **json != '"') {
+                if (**json == '\\') (*json)++;
+                (*json)++;
+            }
+            token.type = TOKEN_STRING;
+            token.value = _strndup(start, *json - start);
+            (*json)++;
+            break;
+        default:
+            start = *json;
+            while (**json && !isspace(**json) && strchr(",}]", **json) == NULL) (*json)++;
+            token.value = _strndup(start, *json - start);
+            if (strcmp(token.value, "true") == 0) token.type = TOKEN_TRUE;
+            else if (strcmp(token.value, "false") == 0) token.type = TOKEN_FALSE;
+            else if (strcmp(token.value, "null") == 0) token.type = TOKEN_NULL;
+            else token.type = TOKEN_NUMBER;
+            break;
+    }
+
+    return token;
+}
+
+void expectToken(TokenType expected, const char **json) {
+    Token token = getNextToken(json);
+    if (token.type != expected) {
+        fprintf(stderr, "JSON parse error: expected %d but got %d\n", expected, token.type);
+        exit(EXIT_FAILURE);
+    }
+}
+
+JsonValue *parseJson(const char **json) {
+    Token token;
+    JsonValue *value = NULL;
+
+    while (1) {
+        token = getNextToken(json);
+        if (token.type == TOKEN_EOF) {
+            break;
+        }
+
+        switch (token.type) {
+            case TOKEN_NUMBER:
+                value = malloc(sizeof(JsonValue));
+                if (!value) return NULL;
+                value->type = JSON_INT;
+                value->data.intValue = atoi(token.value);
+                free(token.value);
+                return value;
+
+            case TOKEN_STRING:
+                value = malloc(sizeof(JsonValue));
+                if (!value) return NULL;
+                value->type = JSON_STRING;
+                value->data.stringValue = token.value;
+                return value;
+
+            case TOKEN_LBRACE:
+                value = malloc(sizeof(JsonValue));
+                if (!value) return NULL;
+                value->type = JSON_OBJECT;
+                initObject(value);
+                while (1) {
+                    Token keyToken = getNextToken(json);
+                    if (keyToken.type == TOKEN_RBRACE) {
+                        break; // End of object
+                    }
+                    expectToken(TOKEN_COLON, json); // Expect colon after key
+                    JsonValue *subValue = parseJson(json); // Parse value
+                    addObjectItem(value, keyToken.value, subValue);
+                    free(keyToken.value);
+                    Token commaOrEnd = getNextToken(json);
+                    if (commaOrEnd.type == TOKEN_RBRACE) {
+                        break; // Properly end the object
+                    }
+                }
+                return value;
+
+            case TOKEN_LBRACKET:
+                value = malloc(sizeof(JsonValue));
+                if (!value) return NULL;
+                value->type = JSON_ARRAY;
+                initArray(value);
+                while (1) {
+                    Token nextToken = getNextToken(json);
+                    if (nextToken.type == TOKEN_RBRACKET) {
+                        break; // End of array
+                    }
+                    (*json)--; // Unread the last token, because it's a part of an element
+                    JsonValue *item = parseJson(json);
+                    addArrayItem(value, item);
+                    nextToken = getNextToken(json);
+                    if (nextToken.type == TOKEN_RBRACKET) {
+                        break; // End of array
+                    }
+                }
+                return value;
+
+            default:
+                fprintf(stderr, "Unexpected token '%s' at line %d, column %d\n", 
+                token.value ? token.value : "<none>", token.line, token.column);
+                if (value) {
+                    json_free(value);
+                }
+                return NULL;
+        }
+    }
+
+    return value;
+}
+
 int main() {
-    JsonValue root;
-    root.type = JSON_OBJECT;
-    initObject(&root);
-    JsonValue intValue = {.type = JSON_INT, .data.intValue = 123};
-    addObjectItem(&root, "exampleNumber", &intValue);
-    
+
+    FILE *fd = fopen("../example.json", "r");
+    if(!fd){
+        perror("error open example.json");
+        return EXIT_FAILURE;
+    }
+
+    char json_example[10000];
+
+    size_t num_read = fread(json_example, sizeof(char), sizeof(json_example), fd);
+
+    fread(json_example, 10000, 10000, fd);
+
+    fclose(fd);
+
+    json_example[num_read] = '\0';
+
+    const char* pointer_to_json = json_example;
+    JsonValue* root = parseJson(&pointer_to_json);
+
     FILE *file = fopen("output.json", "w");
     if (!file) {
         perror("Failed to open file");
         return EXIT_FAILURE;
     }
 
-    printJsonToFile(file, &root);
+    printJsonToFile(file, root);
 
     fclose(file);
 
-    json_free(&root);
+    json_free(root);
 
     return 0;
 }
