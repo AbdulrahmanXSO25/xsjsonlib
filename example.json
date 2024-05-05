@@ -19,6 +19,41 @@
     "site_admin": false,
     "location": null,
     "email": null,
+    "data": {
+        "key1": true,
+        "key2": "value2",
+        "key3": [
+            "string 1",
+            "string 2",
+            "3"
+        ],
+        "null_array": [
+            null,
+            null,
+            null
+        ],
+        "bool_array": [
+            true,
+            false,
+            true
+        ],
+        "objectArray": [
+            {
+                "obj1key": "obj1val",
+                "obj2key": false,
+                "obj3key": 15555555,
+                "obj4key": 15151.5151,
+                "obj5key": [
+                    {
+                        "obj5key1": "obj5val2"
+                    },
+                    {
+                        "obj5key2": "obj5val2"
+                    }
+                ]
+            }
+        ]
+    },
     "hireable": null,
     "bio": "Junior Software Developer",
     "twitter_username": null,
